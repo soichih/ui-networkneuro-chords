@@ -1,0 +1,234 @@
+<html>
+<head>
+    <title>networkneuro chords</title>
+
+</head>
+<body>
+
+<div id="app">
+    {{message}}
+    <div ref="d3"></div>
+</div>
+
+<script src='https://d3js.org/d3.v4.min.js'></script>
+<script src="https://d3js.org/d3-array.v1.min.js"></script>
+<script src="https://d3js.org/d3-path.v1.min.js"></script>
+<script src="https://d3js.org/d3-chord.v1.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vue@2.5.22/dist/vue.js"></script>
+
+<script>
+
+var app = new Vue({
+    el: '#app',
+    data: {
+        message: 'count.csv',
+        svg: null,
+    },
+
+    methods: {
+        async fetch_data(cb) {
+            let matrix = await fetch("testdata/density.csv").then(res=>{
+                return res.text();
+            }).then(csv=>{
+                let rows = csv.trim().split("\n");
+                let matrix = [];
+                rows.forEach(row=>{
+                    matrix.push(row.trim().split(",").map(s=>parseFloat(s)));
+                });
+                return matrix;
+            });
+
+            let labels = await fetch("testdata/labels.csv").then(res=>{
+                return res.text();
+            }).then(csv=>{
+                let rows = csv.trim().split("\n");
+                let labels = [];
+                rows.forEach(row=>{
+                    let cols = row.trim().split(",");
+                    labels.push({
+                        hemi: cols[0].trim(),
+                        label: cols[1].trim(), 
+                        r: parseInt(cols[2]), g: parseInt(cols[3]), b: parseInt(cols[4]),
+                    });
+                });
+                return labels;
+            });
+
+            //reverse matrix columns
+            for(var y = 0;y<68;++y) {
+                for(var x = 0;x<34;++x) {
+                    let l = matrix[y].pop();
+                    matrix[y].splice(x, 0, l);
+                }
+            }
+
+            //reverse matrix rows
+            //reverse order for right hemi for better symetry
+            for(var i = 0;i<34;++i) {
+                let last = labels.pop();
+                labels.splice(i, 0, last);
+                last = matrix.pop();
+                matrix.splice(i, 0, last);
+            }       
+
+            cb({matrix, labels});
+        },
+
+        focus(d, i) {
+            //console.log(d, i);
+            this.svg.selectAll(".fiber")
+                .filter(d=>{ return d.source.index != i && d.target.index != i;})
+                .transition()
+                .style("opacity", 0)
+            /*
+            this.svg.select("#text"+i)
+                .transition()
+                .style("fill", "white")
+            */
+        },
+        defocus(d, i) {
+            this.svg.selectAll(".fiber")
+                .transition()
+                .style("opacity", 1);
+
+            /*
+            this.svg.select("#text"+i)
+                .transition()
+                .style("opacity", 1);
+            */
+        }
+    },
+    created() {
+        this.fetch_data(data=>{
+
+            function color(index) {
+                let label = data.labels[index];
+                return d3.rgb(label.r, label.g, label.b);
+            }
+            function label(index) {
+                return data.labels[index].label;
+            }
+            
+            var res = d3.chord()
+                .padAngle(0.02)     // padding between entities (black arc)
+                //.sortSubgroups(d3.descending)
+                (data.matrix)
+
+            // create the svg area
+            this.svg = d3.select(this.$refs.d3)
+                .append("svg")
+                //.attr("viewBox", [-width / 2, -height / 2, width, height])
+                .attr("font-size", 10)
+                .attr("font-family", "sans-serif")
+                .style("background-color", "black")
+                .attr("width", "100%")
+                .attr("height", "auto")
+                .append("g")
+                .attr("transform", "translate(450,500)")
+
+            // Add the links between groups
+            this.svg
+                .datum(res)
+                .append("g")
+                .selectAll("path")
+                .data(function(d) { console.log(d); return d; })
+                .enter()
+
+                .append("path")
+                .attr("fill-opacity", 0.7)
+                .attr("d", d3.ribbon()
+                    .radius(270)
+                )
+                .attr("class", "fiber")
+                .style("fill", d=>color(d.source.index))
+                //.style("stroke", d=>d3.rgb(color(d.source.index)).darker())
+            
+            const group = this.svg.datum(res)
+                .append("g")
+                .selectAll("g")
+                .data(d=>d.groups)
+                .enter()
+
+            let rois = group._groups[0];
+            //console.dir(rois);
+
+            // add the groups on the inner part of the circle
+            group.append("g")
+                .append("path")
+                .style("fill", d=>color(d.index))
+                //.style("stroke", d=>color(d.index))
+                .attr("id",(d, i)=>{ return "roi" + d.index; })
+                .attr("d", d3.arc()
+                    .innerRadius(300)
+                    .outerRadius(290)
+                )
+                .attr('class', 'roi')
+                .on("mouseover", this.focus)
+                .on("mouseout", this.defocus);
+
+            group.append("g")
+                .append("text")
+                .each(d=>{ d.angle = (d.startAngle + d.endAngle) / 2;})
+                .attr("dy", ".35em")
+                .attr("font-size", 16)
+                .attr("font-weight", "bold")
+                .style("fill", d=>d3.rgb(color(d.index)).darker())
+                .attr("id",(d, i)=>{ return "text" + d.index; })
+                .attr("transform", d => `
+                    rotate(${(d.angle * 180 / Math.PI - 90)})
+                    translate(310)
+                    ${d.angle > Math.PI ? "rotate(180)" : ""}
+                `)
+                .attr("text-anchor", d=>d.angle > Math.PI ? "end" : null)
+                .text(d=>label(d.index))
+                .on("mouseover", this.focus)
+                .on("mouseout", this.defocus);
+
+            //right hemi label
+            let rightarc = d3.arc()
+                .innerRadius(275)
+                .outerRadius(285)
+                .startAngle(rois[0].__data__.startAngle)
+                .endAngle(rois[33].__data__.endAngle)
+            group.append("g")
+                .append("path")
+                .attr("d", rightarc)
+                .attr('fill', '#2693ff')
+                .attr('id', 'right-hemi')
+            let text = group.append("text")
+                .attr("x", 500)
+                .attr("dy", 9);
+            text.append("textPath")
+                //.attr("stroke","#fff")
+                .attr('fill', '#fff')
+                .attr("xlink:href","#right-hemi")
+                .text("RIGHT")
+
+            //draw left hemi label
+            let leftarc = d3.arc()
+                .innerRadius(275)
+                .outerRadius(285)
+                .startAngle(rois[34].__data__.startAngle)
+                .endAngle(rois[67].__data__.endAngle)
+            group
+                .append("path")
+                .attr("d", leftarc)
+                .attr('fill', '#159957')
+                .attr('id', 'left-hemi')
+            text = group.append("text")
+                .attr("x", 400)
+                .attr("dy", 9);
+            text.append("textPath")
+                //.attr("stroke","#fff")
+                .attr('fill', '#fff')
+                .attr("xlink:href","#left-hemi")
+                .text("LEFT")
+
+        });
+
+    }
+})
+
+</script>
+</body>
+</html>
